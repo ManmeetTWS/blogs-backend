@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const Blog = require("../models/blogModel");
+const User = require('../models/userModel');
 const Comments = require('../models/commentsModel');
 
 const allBlogs = async (req, res) => {
@@ -23,14 +24,18 @@ const allBlogs = async (req, res) => {
 
     const modifiedBlogs = blogs.map((blog) => ({
       _id: blog._id,
+      blogTitle: blog.blogTitle,
       blogData: blog.blogData,
       blogLikes: blog.blogLikes,
       createdAt: blog.createdAt,
+      cover_image_url: blog.cover_image_url,
+      tags:blog.tags,
       author: blog.author,
     }));
 
     const response = {
       blogs: modifiedBlogs,
+      total:totalBlogs,
       next: remainingBlogs > 0 ? remainingBlogs : 0,
     };
 
@@ -66,8 +71,11 @@ const getBlogDetail = async (req, res) => {
 
 const createBlog = async (req, res) => {
   const blogData = {
+    blogTitle:req.body.blogTitle,
     blogData:req.body.blogData,
-    author:req.body.author
+    author:req.body.author,
+    tags:req.body.tags,
+    cover_image_url:req.body.cover_image_url
   };
   if (!blogData) {
     return res.status(400).json({ error: "Blog can't be Empty!" });
@@ -75,7 +83,7 @@ const createBlog = async (req, res) => {
 
   try {
     const blog = await Blog.create(blogData);
-
+    
     if (!blog) {
       return res.status(400).json({ error: "Failed to create this Blog." });
     }
@@ -134,12 +142,12 @@ const updateBlog = async (req, res) => {
     return res.status(400).json({ error: "Invalid blog ID" });
   }
 
-  const { newBlogData } = req.body;
+  const { newBlogTitle,newBlogData, newTags, newCoverImageUrl } = req.body;
 
   try {
     const updatedBlog = await Blog.findOneAndUpdate(
       { _id: blogId },
-      { $set: { blogData : newBlogData } },
+      { $set: { blogTitle:newBlogTitle, blogData : newBlogData, tags:newTags, cover_image_url: newCoverImageUrl } },
       { new: true }
     );
 
@@ -189,15 +197,148 @@ const deleteBlog = async (req, res) => {
 };
 
 
+const search = async (req, res) => {
+  try {
+    const searchQuery = req.params.query;
+
+    // Escape special characters in the searchQuery
+    const escapedQuery = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const blogs = await Blog.find({
+      $or: [
+        { blogTitle: { $regex: escapedQuery, $options: 'i' } },
+        { tags: { $in: [new RegExp(escapedQuery, 'i')] } },
+      ],
+    });
+
+    const blogsWithTitle = blogs.filter((blog) =>
+      blog.blogTitle.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+    const blogsWithTags = blogs.filter((blog) =>
+      blog.tags.some((tag) => tag.toLowerCase().includes(searchQuery.toLowerCase()))
+    );
+
+    const searchResults = {
+      with_title: blogsWithTitle,
+      with_tag: blogsWithTags,
+    };
+    return res.status(200).json(searchResults);
+  } catch (error) {
+    console.error('Error:', error);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+
+const getBookmarks = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // 1. Find the user by ID
+    const user = await User.findById(userId);
+
+    // 2. Handle the case when the user is not found
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // 3. Get the bookmarked blog IDs from the user
+    const bookmarkedBlogIds = user.bookmarks;
+
+    // 4. If there are no bookmarked blog IDs, return an empty array
+    if (!bookmarkedBlogIds || bookmarkedBlogIds.length === 0) {
+      return res.status(200).json({ bookmarks: [] });
+    }
+
+    // 5. Find the bookmarked blogs using the Blog model
+    const bookmarkedBlogs = await Blog.find({ _id: { $in: bookmarkedBlogIds } });
+
+    // 6. Handle errors gracefully
+    if (!bookmarkedBlogs || bookmarkedBlogs.length === 0) {
+      return res.status(200).json({ error: 'No bookmarked blogs found' });
+    }
+
+    // 7. Return the bookmarked blogs as a response
+    res.status(200).json({ bookmarks: bookmarkedBlogs });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+
+const addBookmark = async (req, res) => {
+  const { blog_id } = req.body;
+  const user_id = req.user._id;
+
+  try {
+    // Step 1: Find the user
+    const user = await User.findById(user_id);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Step 2: Check if the blog_id is not already in bookmarks
+    if (!user.bookmarks.includes(blog_id)) {
+      // Step 3: Push the blog_id into the bookmarks array
+      user.bookmarks.push(blog_id);
+
+      // Step 4: Save the updated user document
+      await user.save();
+    
+
+      return res.status(200).json({ message: 'Blog added to bookmarks' });
+    } else {
+      return res.status(200).json({ message: 'Blog is already in bookmarks' });
+    }
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+const removeBookmark = async (req, res) => {
+  const { blog_id } = req.body;
+  const user_id = req.user._id;
+  // console.log("RemoveBookmark - ", blog_id)
+
+  try {
+    // Step 1: Find the user
+    const user = await User.findById(user_id);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Step 2: Check if the blog_id is in bookmarks
+    if (user.bookmarks.includes(blog_id)) {
+      // Step 3: Remove the blog_id from the bookmarks array
+      user.bookmarks = user.bookmarks.filter((id) => id.toString() !== blog_id.toString());
+
+      // Step 4: Save the updated user document
+      await user.save();
+  
+      return res.status(200).json({ message: 'Blog removed from bookmarks' });
+    } else {
+      return res.status(200).json({ message: 'Blog was not in bookmarks' });
+    }
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+
 module.exports = {
   allBlogs,
   getBlogDetail,
   createBlog,
   like,
-  // AddComment,
-  // removeComment,
-  // AddReply,
-  // removeReply,
+  search,
   updateBlog,
-  deleteBlog
+  deleteBlog,
+  getBookmarks,
+  addBookmark,
+  removeBookmark
 };

@@ -18,7 +18,13 @@ const userSchema = new Schema({
     password:{
         type:String,
         required:true
-    }
+    },
+    bookmarks:[
+        {
+            type:Schema.Types.ObjectId,
+            ref:'Blog'
+        }
+    ]
 }, {timestamps: true})
 
 userSchema.statics.signup = async function(email, username, password) {
